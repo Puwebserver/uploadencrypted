@@ -1,207 +1,97 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>My Secure Files</title>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Upload File</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
-  html,body{margin:0;padding:0;font-family:system-ui,Segoe UI,Roboto,Arial}
-  .wrap{max-width:780px;margin:24px auto;padding:16px}
-  .card{border:1px solid #e5e7eb;border-radius:16px;padding:16px;margin-bottom:16px}
-  .row{display:flex;gap:8px;flex-wrap:wrap}
-  input,button{padding:10px 12px;border-radius:10px;border:1px solid #d1d5db}
-  button{cursor:pointer}
-  .right{margin-left:auto}
-  .hidden{display:none}
-  ul{list-style:none;padding:0;margin:0}
-  li{display:flex;align-items:center;gap:8px;padding:8px;border-bottom:1px solid #f3f4f6}
-  .muted{color:#6b7280;font-size:12px}
+  body{font-family:sans-serif;margin:0;padding:16px;background:#f9fafb;}
+  .card{background:#fff;padding:16px;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,0.08);max-width:500px;margin:20px auto;}
+  input,button{padding:10px;width:100%;margin:8px 0;border-radius:8px;border:1px solid #d1d5db;}
+  button{background:#2563eb;color:#fff;border:none;cursor:pointer;}
+  #result{margin-top:12px;font-size:14px;}
 </style>
 </head>
 <body>
-<div class="wrap">
-  <h1>Secure File Vault</h1>
-
-  <div id="auth-card" class="card">
-    <h3>Login or Sign up</h3>
-    <div class="row">
-      <input id="email" type="email" placeholder="Email" autocomplete="email" />
-      <input id="password" type="password" placeholder="Password" autocomplete="current-password" />
-      <button id="loginBtn">Log in</button>
-      <button id="signupBtn">Sign up</button>
-    </div>
-    <p class="muted">You’ll only see files under your own account.</p>
-  </div>
-
-  <div id="app-card" class="card hidden">
-    <div class="row">
-      <div id="userInfo" class="muted"></div>
-      <button id="logoutBtn" class="right">Log out</button>
-    </div>
-
-    <div class="card">
-      <h3>Upload a file</h3>
-      <div class="row">
-        <input id="fileInput" type="file" />
-        <button id="uploadBtn">Upload</button>
-      </div>
-      <p id="uploadStatus" class="muted"></p>
-    </div>
-
-    <div class="card">
-      <h3>Your files</h3>
-      <ul id="fileList"></ul>
-      <div class="row">
-        <button id="refreshBtn">Refresh</button>
-      </div>
-      <p class="muted">Downloads use short-lived signed links.</p>
-    </div>
-  </div>
+<div class="card">
+  <h2>Secure Upload</h2>
+  <input id="publicKey" type="text" placeholder="Enter your Public Key" required />
+  <input id="customName" type="text" placeholder="Optional: Custom file name" />
+  <input id="fileInput" type="file" />
+  <button id="uploadBtn">Upload</button>
+  <p id="status"></p>
+  <div id="result"></div>
 </div>
 
 <script>
-  // 1) Fill these from Supabase > Settings > API
   const SUPABASE_URL = "https://fjkkdcnzozlejdwyquvh.supabase.co";
   const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZqa2tkY256b3psZWpkd3lxdXZoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTY1MjgxNjcsImV4cCI6MjA3MjEwNDE2N30.buL6jOmdgkNmAP6LYVPydvTaMhmeCejRRMGdVjWFAYw";
   const BUCKET = "secure-files";
 
   const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-  const authCard = document.getElementById('auth-card');
-  const appCard  = document.getElementById('app-card');
-  const userInfo = document.getElementById('userInfo');
-  const fileList = document.getElementById('fileList');
-  const uploadStatus = document.getElementById('uploadStatus');
+  const uploadBtn = document.getElementById("uploadBtn");
+  const statusEl = document.getElementById("status");
+  const resultEl = document.getElementById("result");
 
-  document.getElementById('loginBtn').onclick = async () => {
-    const email = document.getElementById('email').value.trim();
-    const password = document.getElementById('password').value;
-    const { error } = await sb.auth.signInWithPassword({ email, password });
-    if (error) return alert(error.message);
-    await refreshUI();
-  };
+  uploadBtn.onclick = async () => {
+    const publicKey = document.getElementById("publicKey").value.trim();
+    const customName = document.getElementById("customName").value.trim();
+    const fileEl = document.getElementById("fileInput");
 
-  document.getElementById('signupBtn').onclick = async () => {
-    const email = document.getElementById('email').value.trim();
-    const password = document.getElementById('password').value;
-    const { error } = await sb.auth.signUp({ email, password });
-    if (error) return alert(error.message);
-    alert("Account created. Please log in.");
-  };
-
-  document.getElementById('logoutBtn').onclick = async () => {
-    await sb.auth.signOut();
-    await refreshUI();
-  };
-
-  document.getElementById('uploadBtn').onclick = async () => {
-    const fileEl = document.getElementById('fileInput');
-    if (!fileEl.files.length) return alert("Choose a file first.");
-    const file = fileEl.files[0];
-
-    const { data: { user } } = await sb.auth.getUser();
-    if (!user) return alert("Please log in first.");
-
-    const path = `${user.id}/${Date.now()}_${sanitize(file.name)}`;
-
-    uploadStatus.textContent = "Uploading...";
-    const { error } = await sb.storage.from(BUCKET).upload(path, file, {
-      contentType: file.type || "application/octet-stream",
-      upsert: false,
-      cacheControl: "3600"
-    });
-    if (error) {
-      uploadStatus.textContent = "";
-      return alert("Upload failed: " + error.message);
+    if (!publicKey) {
+      alert("Public Key is required");
+      return;
     }
-    uploadStatus.textContent = "Done!";
-    fileEl.value = "";
-    await loadFiles();
-  };
-
-  document.getElementById('refreshBtn').onclick = loadFiles;
-
-  function sanitize(name){
-    return name.replace(/[^\w.\-]+/g, "_");
-  }
-
-  async function loadFiles(){
-    fileList.innerHTML = "";
-    const { data: { user } } = await sb.auth.getUser();
-    if (!user) return;
-
-    // List files in the user's folder
-    const { data, error } = await sb.storage.from(BUCKET).list(user.id, {
-      limit: 100,
-      sortBy: { column: 'created_at', order: 'desc' }
-    });
-    if (error) {
-      return alert("List error: " + error.message);
-    }
-
-    if (!data || !data.length){
-      fileList.innerHTML = "<li class='muted'>No files yet.</li>";
+    if (!fileEl.files.length) {
+      alert("Please select a file");
       return;
     }
 
-    for (const obj of data){
-      const li = document.createElement('li');
-      li.innerHTML = `
-        <span title="${obj.name}">${truncate(obj.name, 48)}</span>
-        <span class="muted right">${bytes(obj.metadata?.size)}</span>
-      `;
-      const dl = document.createElement('button');
-      dl.textContent = "Get link";
-      dl.onclick = async () => {
-        const path = `${user.id}/${obj.name}`;
-        const { data: linkData, error } = await sb.storage.from(BUCKET)
-          .createSignedUrl(path, 60 * 60); // 1 hour
-        if (error) return alert("Link error: " + error.message);
-        // Show link (copyable); Adalo WebView can open it directly.
-        prompt("Temporary download link (valid 1 hour):", linkData.signedUrl);
-      };
+    const file = fileEl.files[0];
+    const finalName = customName ? customName : file.name;
+    const path = `${publicKey}/${Date.now()}_${sanitize(finalName)}`;
 
-      const del = document.createElement('button');
-      del.textContent = "Delete";
-      del.onclick = async () => {
-        const path = `${user.id}/${obj.name}`;
-        const { error } = await sb.storage.from(BUCKET).remove([path]);
-        if (error) return alert("Delete error: " + error.message);
-        await loadFiles();
-      };
+    statusEl.textContent = "Uploading...";
 
-      li.appendChild(dl);
-      li.appendChild(del);
-      fileList.appendChild(li);
+    const { error } = await sb.storage.from(BUCKET).upload(path, file, {
+      contentType: file.type || "application/octet-stream",
+      upsert: false
+    });
+
+    if (error) {
+      statusEl.textContent = "";
+      alert("Upload failed: " + error.message);
+      return;
     }
-  }
 
-  function truncate(s, n){ return s.length > n ? s.slice(0, n-1) + "…" : s }
-  function bytes(n){
-    if(!n && n!==0) return "";
-    const u = ["B","KB","MB","GB","TB"]; let i=0; while(n>=1024 && i<u.length-1){ n/=1024; i++ } 
-    return n.toFixed(1)+" "+u[i];
-  }
+    statusEl.textContent = "Upload complete.";
 
-  async function refreshUI(){
-    const { data: { user } } = await sb.auth.getUser();
-    if (user){
-      authCard.classList.add('hidden');
-      appCard.classList.remove('hidden');
-      userInfo.textContent = `Logged in as ${user.email}`;
-      await loadFiles();
-    } else {
-      appCard.classList.add('hidden');
-      authCard.classList.remove('hidden');
-      userInfo.textContent = "";
-      fileList.innerHTML = "";
+    // Generate signed URL (valid for 24 hours)
+    const { data: linkData, error: linkError } = await sb.storage.from(BUCKET)
+      .createSignedUrl(path, 60 * 60 * 24);
+    if (linkError) {
+      resultEl.innerHTML = "File uploaded, but could not create download link.";
+      return;
     }
-  }
 
-  // Keep UI in sync with auth state
-  sb.auth.onAuthStateChange(refreshUI);
-  refreshUI();
+    resultEl.innerHTML = `
+      <p><strong>File Path:</strong> ${path}</p>
+      <p><a href="${linkData.signedUrl}" target="_blank">Download (24h link)</a></p>
+    `;
+
+    // OPTIONAL: Send data to an automation tool (Zapier/Make) via webhook
+    // fetch("https://hooks.zapier.com/hooks/catch/...", {
+    //   method: "POST",
+    //   headers: {"Content-Type":"application/json"},
+    //   body: JSON.stringify({publicKey, path, link: linkData.signedUrl})
+    // });
+  };
+
+  function sanitize(name){
+    return name.replace(/[^\w.\-]+/g,"_");
+  }
 </script>
 </body>
 </html>
